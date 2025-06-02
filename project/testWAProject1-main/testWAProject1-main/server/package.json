@@ -1,0 +1,25 @@
+{
+  "name": "forum-server",
+  "version": "1.0.0",
+  "description": "Forum web application server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.10",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "express-validator": "^7.0.1",
+    "passport": "^0.6.0",
+    "passport-local": "^1.0.0",
+    "passport-totp": "^0.0.2",
+    "sqlite3": "^5.1.6",
+    "thirty-two": "^1.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
