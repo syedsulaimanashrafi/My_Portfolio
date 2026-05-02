@@ -1,0 +1,46 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: geocontrol-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: geocontrol
+      MYSQL_USER: geo_user
+      MYSQL_PASSWORD: geo_pass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - '3306:3306'
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
+    container_name: geocontrol-backend
+    restart: unless-stopped
+    depends_on:
+      - db
+    command: ["npm", "run", "start", "--", "--cors", "--port", "5000"]
+    environment:
+      DB_TYPE: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USERNAME: geo_user
+      DB_PASSWORD: geo_pass
+      DB_NAME: geocontrol
+    ports:
+      - '3000:3000'
+
+  frontend:
+    image: smpolito/geocontrolui:latest
+    container_name: geocontrol-frontend
+    restart: unless-stopped
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./frontend/env-vars.json:/app/dist/config.json
+
+volumes:
+  db_data:

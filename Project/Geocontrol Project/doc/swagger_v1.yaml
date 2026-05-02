@@ -1,0 +1,2380 @@
+openapi: 3.0.0
+info:
+  title: GeoControl API
+  description: |
+    **GeoControl System Overview**
+
+    GeoControl is a software system designed for monitoring physical and environmental variables in various contexts: from hydrogeological analyses of mountain areas to the surveillance of historical buildings, and even the control of internal parameters (such as temperature or lighting) in residential or working environments.  
+    It was commissioned by the Union of Mountain Communities of the Piedmont region for managing the hydrogeological state of its territories. However, thanks to its modular structure, GeoControl has also been commercialized to different public or private entities requiring continuous monitoring of physical parameters.  
+    The system meets high reliability requirements and must ensure that no more than six measurements per year, per sensor, are lost. From an organizational perspective, GeoControl uses a token-based authentication mechanism, with different user roles to regulate access levels to the functionalities.
+
+    ---
+
+    **Hierarchical Structure and Components**
+
+    GeoControl’s hierarchy is organized into three main levels:
+
+    1. **Network**  
+       - A logical grouping that acts as a container for multiple gateways (and their associated sensors).  
+       - Identified by a unique alphanumeric code (chosen at creation time) and can represent, for example, a monitoring network for a single municipality or an entire building.  
+       - Does not correspond to a physical device but is instead a software definition to organize and manage different groups of devices.
+
+    2. **Gateway**  
+       - A physical device uniquely identified by its MAC address, equipped with a network interface and connected through it to the GeoControl system.  
+       - Connected to one or more sensors via serial interfaces, through which it receives measured values and timestamps.  
+       - Performs the digital conversion of data from the sensors and transmits them over the network.
+
+    3. **Sensor**  
+       - The physical device that actually measures the physical quantity (temperature, inclination, etc.) every 10 minutes.  
+       - Lacks its own network interface but is uniquely identified by its MAC address (e.g., 71:B1:CE:01:C6:A9).  
+       - Communicates exclusively with its reference gateway via a serial connection, sending the measured value and a timestamp.  
+       - The timestamp corresponds to the exact moment of measurement. Sensors send the date to the system in **ISO 8601 format with their local timezone**.
+
+    This structure allows for an accurate modeling of field devices, maintaining a precise correspondence between physical entities and the software representation. The GeoControl system, installed on a server, receives sensor measurements from the gateways and manages their storage, analysis, and retrieval.
+
+    ---
+
+    **Main Functionalities**
+
+    Below are the main functionalities provided by GeoControl, aligned with the system’s main areas:
+
+    1. **Authentication and User Management**  
+       - The system requires login credentials (username and password) and issues a token to be included in the `Authorization` header of subsequent requests.  
+       - The *Admin* role has full access to all resources, including user and network management.  
+       - The *Operator* role can manage networks, gateways, sensors, and insert measurements, but does not have access to user-related functionalities.  
+       - The *Viewer* role can only consult data (read-only operations on networks, gateways, and sensors, as well as measurements), and does not have access to user information.
+
+    2. **Topology Management and Synchronization**  
+       - Creation, updating, and removal of networks, gateways, and sensors, reflecting any field changes (new devices, replacements, decommissioning, etc.).  
+       - Unique identification of elements (code for networks, MAC address for gateways and sensors).
+
+    3. **Measurement Collection and Storage**  
+       - The system records all measurements received from the gateways, associating them with the correct sensors.  
+       - Each measurement includes a numeric value and the timestamp. **The system converts and stores the timestamp in ISO 8601 format using the UTC timezone.** When retrieving data, the system always returns timestamps in UTC, allowing clients to convert them to their local timezone if needed.
+          Example:
+
+            - Sensor sends: "2025-02-18T15:30:00+01:00" (Sensor's local timezone: UTC+1)
+            - System stores: "2025-02-18T14:30:00Z" (Converted to UTC)
+            - System returns: "2025-02-18T14:30:00Z"
+            - Client can convert it back to local timezone if needed: "2025-02-18T15:30:00+01:00"
+
+    4. **Calculations and Statistical Analysis**  
+       - The system must be able to compute:  
+         - **Mean** (μ) and **variance** (σ²) of measurements over a given time span.  
+         - **Thresholds** (upper and lower) to identify potential anomalous values, calculated as:
+
+           ```
+           upperThreshold = μ + 2σ
+           lowerThreshold = μ - 2σ
+           ```
+
+         - **Outlier**: any value exceeding the upper threshold or dropping below the lower threshold is considered anomalous and is flagged accordingly as an outlier.
+
+  version: 1.0.0
+tags:
+  - name: Authentication
+    description: Endpoints related to user authentication.
+  - name: Users
+    description: Endpoints for managing users.
+  - name: Networks
+    description: Endpoints for managing networks.
+  - name: Gateways
+    description: Endpoints for managing gateways within networks.
+  - name: Sensors
+    description: Endpoints for managing sensors within gateways.
+  - name: Measurements
+    description: Endpoints for managing sensor measurements and statistics.
+servers:
+  # Added by API Auto Mocking Plugin
+  - description: SwaggerHub API Auto Mocking
+    url: https://virtserver.swaggerhub.com/StefanoMancini/GeoControl/1.0.0
+  - url: http://localhost:3000/api/v1
+    description: Development server
+paths:
+  # Authentication endpoints
+  /auth:
+    post:
+      summary: Authenticate user and return a bearer token
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/User"
+            example:
+              username: "s0123465"
+              password: "FR90!5g@+ni"
+      responses:
+        "200":
+          description: Token generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Token"
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Invalid password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /users:
+    get:
+      summary: Retrieve all users
+      description: This endpoint can be used only by Admin users
+      tags:
+        - Users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: A list of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    post:
+      summary: Create a new user
+      description: This endpoint can be used only by Admin users
+      tags:
+        - Users
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, type]
+              properties:
+                username:
+                  type: string
+                  minLength: 1
+                  description: Unique username
+                  example: s0123465
+                password:
+                  type: string
+                  minLength: 5
+                  description: Password for the user account
+                  example: "FR90!5g@+ni"
+                type:
+                  $ref: "#/components/schemas/UserType"
+      responses:
+        "201":
+          description: User created
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "409":
+          description: Username already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /users/{userName}:
+    get:
+      summary: Retrieve a specific user
+      description: This endpoint can be used only by Admin users
+      tags:
+        - Users
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A single user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    delete:
+      summary: Delete a user
+      description: This endpoint can be used only by Admin users
+      tags:
+        - Users
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: User deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  # Network, Gateway, Sensor endpoints
+  /networks:
+    get:
+      summary: Retrieve all networks
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Networks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: A list of networks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Network"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    post:
+      summary: Create a new network
+      description: |
+        This endpoint can be used only by Admin and Operator users.
+        Each request to create a Network is considered valid even if it contains nested Gateways and Sensors. However, only the Network data will be processed. Any nested objects included in the request will be ignored and not created through this operation.
+      tags:
+        - Networks
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  minLength: 1
+                  description: Alphanumeric unique identifier for the network
+                  example: NET01
+                name:
+                  type: string
+                  description: Name of the network
+                  example: Alp Monitor
+                description:
+                  type: string
+                  description: Description of the network
+                  example: Alpine Weather Monitoring Network
+                gateways:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Gateway"
+            example:
+              code: "NET01"
+              name: "Alp Monitor"
+              description: "Alpine Weather Monitoring Network"
+      responses:
+        "201":
+          description: Network created
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "409":
+          description: Network code already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /networks/{networkCode}:
+    get:
+      summary: Retrieve a specific network
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Networks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A single network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    patch:
+      summary: Update a network
+      description: |
+        This endpoint can be used only by Admin and Operator users.
+        Each request to update a Network is considered valid even if it contains nested Gateways and Sensors. However, only the Network data will be processed. Any nested objects included in the request will be ignored and not created or updated through this operation. The request must allow the update of all the Network fields, including the Network code.
+      tags:
+        - Networks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Network"
+            example:
+              code: "NEWCODE"
+              name: "Updated Name"
+              description: "Updated Description"
+      responses:
+        "204":
+          description: Network updated
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "409":
+          description: Network code already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    delete:
+      summary: Delete a network
+      description: This endpoint can be used only by Admin and Operator users
+      tags:
+        - Networks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Network deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /networks/{networkCode}/gateways:
+    get:
+      summary: Retrieve all gateways of a network
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Gateways
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A list of gateways
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Gateway"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    post:
+      summary: Create a new gateway for a network
+      description: |
+        This endpoint can be used only by Admin and Operator users
+        Each request to create a Gateway is considered valid even if it contains nested Sensors. However, only the Gateway data will be processed. Any nested objects included in the request will be ignored and not created through this operation.
+      tags:
+        - Gateways
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [macAddress]
+              properties:
+                macAddress:
+                  type: string
+                  minLength: 1
+                  description: MAC address of the gateway
+                  example: 00:11:22:33:44:55
+                name:
+                  type: string
+                  description: Name of the gateway
+                  example: Main Gateway
+                description:
+                  type: string
+                  description: Description of the gateway
+                  example: Gateway at main site
+                sensors:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Sensor"
+            example:
+              macAddress: "94:3F:BE:4C:4A:79"
+              name: "GW01"
+              description: "on-field aggregation node"
+      responses:
+        "201":
+          description: Gateway created
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "409":
+          description: Gateway mac address already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /networks/{networkCode}/gateways/{gatewayMac}:
+    get:
+      summary: Retrieve a specific gateway
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Gateways
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A single gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Gateway"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    patch:
+      summary: Update a gateway
+      description: |
+        This endpoint can be used only by Admin and Operator users
+        Each request to update a Gateway is considered valid even if it contains nestedSensors. However, only the Gateway data will be processed. Any nested objects included in the request will be ignored and not created or updated through this operation. The request must allow the update of all the Gateway fields, including the Gateway mac address.
+      tags:
+        - Gateways
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Gateway"
+            example:
+              macAddress: "1C:6A:66:95:EE:45"
+              name: "Updated Name"
+              description: "Updated Description"
+      responses:
+        "204":
+          description: Gateway updated
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "409":
+          description: Gateway mac address already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    delete:
+      summary: Delete a Gateway
+      description: This endpoint can be used only by Admin and Operator users
+      tags:
+        - Gateways
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Gateway deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /networks/{networkCode}/gateways/{gatewayMac}/sensors:
+    get:
+      summary: Retrieve all sensors of a gateway
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Sensors
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A list of sensors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Sensor"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    post:
+      summary: Create a new sensor for a gateway
+      description: This endpoint can be used only by Admin and Operator users
+      tags:
+        - Sensors
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [macAddress]
+              properties:
+                macAddress:
+                  type: string
+                  minLength: 1
+                  description: MAC address of the sensor
+                  example: 00:11:22:33:44:66
+                name:
+                  type: string
+                  description: Name of the sensor
+                  example: TH01
+                description:
+                  type: string
+                  description: Description of the sensor
+                  example: External thermometer
+                variable:
+                  type: string
+                  description: Variable measured by the sensor
+                  example: temperature
+                unit:
+                  type: string
+                  description: Measurement unit
+                  example: C
+      responses:
+        "201":
+          description: Sensor created
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "409":
+          description: Sensor mac address already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+
+  /networks/{networkCode}/gateways/{gatewayMac}/sensors/{sensorMac}:
+    get:
+      summary: Retrieve a specific sensor
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Sensors
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A single sensor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sensor"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    patch:
+      summary: Update a Sensor
+      description: |
+        This endpoint can be used only by Admin and Operator users
+        The request must allow the update of all the Sensor fields, including the Sensor mac address.
+      tags:
+        - Sensors
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Sensor"
+            example:
+              macAddress: "4F:72:D2:6B:3B:27"
+              name: "Updated Name"
+              description: "Updated Description"
+      responses:
+        "204":
+          description: Sensor updated
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "409":
+          description: Sensor mac address already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "409"
+                name: "ConflictError"
+                message: "Entity with code xxxxx already exists"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    delete:
+      summary: Delete a Sensor
+      description: This endpoint can be used only by Admin and Operator users
+      tags:
+        - Sensors
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Sensor deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/measurements:
+    get:
+      summary: Retrieve measurements for a set of sensors of a specific network
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMacs
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: List of sensor IDs to filter measurements, the value **must be URL encoded** .If no value is passed the system returns the measurements for every sensor in the network
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Measurements retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Measurements"
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/stats:
+    get:
+      summary: Retrieve only statistics for a set of sensors of a specific network
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMacs
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: List of sensor IDs to filter measurements, the value **must be URL encoded**.If no value is passed the system returns the measurements for every sensor in the network
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Statistics retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Measurements"
+              example:
+                - sensorMacAddress: "71:B1:CE:01:C6:A9"
+                  stats:
+                    startDate: "2025-02-18T15:00:00Z"
+                    endDate: "2025-02-18T17:00:00Z"
+                    mean: 23.45
+                    variance: 7.56
+                    upperThreshold: 28.95
+                    lowerThreshold: 17.95
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/outliers:
+    get:
+      summary: Retrieve only outliers measurements for a set of sensors of a specific network
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMacs
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: List of sensor IDs to filter measurements, the value **must be URL encoded**.If no value is passed the system returns the measurements for every sensor in the network
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Outlier measurements retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Measurements"
+              example:
+                - sensorMacAddress: "71:B1:CE:01:C6:A9"
+                  stats:
+                    startDate: "2025-02-18T15:00:00Z"
+                    endDate: "2025-02-18T17:00:00Z"
+                    mean: 23.45
+                    variance: 7.56
+                    upperThreshold: 28.95
+                    lowerThreshold: 17.95
+                  measurements:
+                    - createdAt: "2025-02-18T15:30:00Z"
+                      value: 30.86
+                      isOutlier: true
+                    - createdAt: "2025-02-18T16:00:00Z"
+                      value: 12.34
+                      isOutlier: true
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/gateways/{gatewayMac}/sensors/{sensorMac}/measurements:
+    post:
+      summary: Store measurements for a sensor
+      description: This endpoint can be used only by Admin and Operator users
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/Measurement"
+            example:
+              - "createdAt": "2025-02-18T17:00:00+01:00"
+                "value": 1.8567
+      responses:
+        "201":
+          description: Measurement created
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "/body/xxx' must have required property 'xxx'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "403":
+          description: Insufficient rights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "403"
+                name: "InsufficientRightsError"
+                message: "Forbidden: Insufficient rights"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+    get:
+      summary: Retrieve measurements for a specific sensor
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Measurements retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Measurements"
+              example:
+                sensorMacAddress: "71:B1:CE:01:C6:A9"
+                stats:
+                  startDate: "2025-02-18T15:00:00Z"
+                  endDate: "2025-02-18T17:00:00Z"
+                  mean: 23.45
+                  variance: 7.56
+                  upperThreshold: 28.95
+                  lowerThreshold: 17.95
+                measurements:
+                  - createdAt: "2025-02-18T15:30:00Z"
+                    value: 25.86
+                    isOutlier: false
+                  - createdAt: "2025-02-18T16:00:00Z"
+                    value: 25.34
+                    isOutlier: false
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/gateways/{gatewayMac}/sensors/{sensorMac}/stats:
+    get:
+      summary: Retrieve statistics for a specific sensor
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Statistics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+              example:
+                startDate: "2025-02-18T15:00:00Z"
+                endDate: "2025-02-18T17:00:00Z"
+                mean: 23.45
+                variance: 7.56
+                upperThreshold: 28.95
+                lowerThreshold: 17.95
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+  /networks/{networkCode}/gateways/{gatewayMac}/sensors/{sensorMac}/outliers:
+    get:
+      summary: Retrieve only outliers measurements for a specific sensor
+      description: This endpoint can be used by any kind of authenticated user
+      tags:
+        - Measurements
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: networkCode
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: gatewayMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sensorMac
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T16:00:00+01:00"
+          description: |
+            Start date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+        - name: endDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-02-18T18:00:00+01:00"
+          description: |
+            End date of the measurement interval in **ISO 8601 format** with timezone. 
+            The system expects the timestamp in the format `YYYY-MM-DDTHH:MM:SS±hh:mm` and the value **must be URL encoded**
+      responses:
+        "200":
+          description: Outlier measurements retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Measurements"
+              example:
+                sensorMacAddress: "71:B1:CE:01:C6:A9"
+                stats:
+                  startDate: "2025-02-18T15:00:00Z"
+                  endDate: "2025-02-18T17:00:00Z"
+                  mean: 23.45
+                  variance: 7.56
+                  upperThreshold: 28.95
+                  lowerThreshold: 17.95
+                measurements:
+                  - createdAt: "2025-02-18T15:30:00Z"
+                    value: 30.86
+                    isOutlier: true
+                  - createdAt: "2025-02-18T16:00:00Z"
+                    value: 12.34
+                    isOutlier: true
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "400"
+                name: "BadRequest"
+                message: "request/query/startDate must match format 'date-time'"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "401"
+                name: "UnauthorizedError"
+                message: "Unauthorized: Invalid token format"
+        "404":
+          description: Network/Gateway/Sensor not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "404"
+                name: "NotFoundError"
+                message: "Entity not found"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDTO"
+              example:
+                code: "500"
+                name: "InternalServerError"
+                message: "Internal server error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Token:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          minLength: 10
+          description: Auth token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWV9.dyt0CoTl4WoVjAHI9Q_CwSKhl6d_9rhM3NrXuJttkao
+    UserType:
+      type: string
+      enum:
+        - admin
+        - operator
+        - viewer
+      description: Defines the role of the user.
+    User:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Unique name of the user
+          example: s0123465
+        password:
+          type: string
+          minLength: 5
+          description: Password of the user (plain, not encrypted)
+          example: FR90!5g@+ni
+        type:
+          $ref: "#/components/schemas/UserType"
+    Network:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          description: Alphanumeric unique identifier for the network
+          example: NET01
+        name:
+          type: string
+          description: Name of the network
+          example: Alp Monitor
+        description:
+          type: string
+          description: Description of the network
+          example: Alpine Weather Monitoring Network
+        gateways:
+          type: array
+          items:
+            $ref: "#/components/schemas/Gateway"
+    Gateway:
+      type: object
+      properties:
+        macAddress:
+          type: string
+          minLength: 1
+          description: Unique identifier for the gateway (MAC address)
+          example: 94:3F:BE:4C:4A:79
+        name:
+          type: string
+          description: Name of the gateway
+          example: GW01
+        description:
+          type: string
+          description: Description of the gateway
+          example: on-field aggregation node
+        sensors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sensor"
+    Sensor:
+      type: object
+      properties:
+        macAddress:
+          type: string
+          minLength: 1
+          description: Unique identifier for the sensor (MAC address)
+          example: 71:B1:CE:01:C6:A9
+        name:
+          type: string
+          description: Name of the sensor
+          example: TH01
+        description:
+          type: string
+          description: Description of the sensor
+          example: External thermometer
+        variable:
+          type: string
+          description: Variable associated with the sensor
+          example: temperature
+        unit:
+          type: string
+          description: Unit of the variable
+          example: C
+    Measurements:
+      type: object
+      required:
+        - sensorMacAddress
+      properties:
+        sensorMacAddress:
+          type: string
+          description: Unique identifier for the sensor (MAC address)
+          example: 71:B1:CE:01:C6:A9
+        stats:
+          $ref: "#/components/schemas/Stats"
+        measurements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Measurement"
+    Measurement:
+      type: object
+      required:
+        - createdAt
+        - value
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp of the measurement in **ISO 8601 format** with timezone
+          example: "2025-02-18T16:00:00Z"
+        value:
+          type: number
+          description: Value of the measurement
+          example: 21.8567
+        isOutlier:
+          type: boolean
+          description: Value outside the range defined by the thresholds
+          example: false
+    Stats:
+      type: object
+      required:
+        - mean
+        - variance
+        - upperThreshold
+        - lowerThreshold
+      properties:
+        startDate:
+          type: string
+          format: date-time
+          description: Start date (in **ISO 8601 format** with timezone) for the calculation interval
+          example: "2025-02-18T15:00:00Z"
+        endDate:
+          type: string
+          format: date-time
+          description: End date (in **ISO 8601 format** with timezone) for the calculation interval
+          example: "2025-02-18T17:00:00Z"
+        mean:
+          type: number
+          description: Mean (μ) of the measurements in the specified time interval
+          example: 23.45
+        variance:
+          type: number
+          description: Variance (σ²) of the measurements in the specified time interval
+          example: 7.56
+        upperThreshold:
+          type: number
+          description: Upper threshold (μ + 2σ) for outlier detection
+          example: 28.95
+        lowerThreshold:
+          type: number
+          description: Lower threshold (μ - 2σ) for outlier detection
+          example: 17.95
+    ErrorDTO:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: number
+          description: HTTP code of the error
+          example: 404
+        name:
+          type: string
+          description: Name of the error
+          example: NotFoundError
+        message:
+          type: string
+          description: Message describing the type and the cause of the error
+          example: Entity not found
