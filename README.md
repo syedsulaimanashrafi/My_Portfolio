@@ -1,4 +1,4 @@
-# 🔐 Syed Sulaiman Ashrafi
+#  Syed Sulaiman Ashrafi
 
 <div align="center">
 
